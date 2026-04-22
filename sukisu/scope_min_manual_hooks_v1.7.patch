@@ -1,0 +1,148 @@
+diff --git a/drivers/input/input.c b/drivers/input/input.c
+index c51858f1c..143d61845 100644
+--- a/drivers/input/input.c
++++ b/drivers/input/input.c
+@@ -370,6 +370,12 @@ void input_handle_event(struct input_dev *dev,
+ 	}
+ }
+ 
++#ifdef CONFIG_KSU_MANUAL_HOOK
++extern bool ksu_input_hook __read_mostly;
++extern __attribute__((cold)) int ksu_handle_input_handle_event(
++			unsigned int *type, unsigned int *code, int *value);
++#endif
++
+ /**
+  * input_event() - report new input event
+  * @dev: device that generated the event
+@@ -392,6 +398,11 @@ void input_event(struct input_dev *dev,
+ {
+ 	unsigned long flags;
+ 
++#ifdef CONFIG_KSU_MANUAL_HOOK
++	if (unlikely(ksu_input_hook))
++		ksu_handle_input_handle_event(&type, &code, &value);
++#endif
++
+ 	if (is_event_supported(type, dev->evbit, EV_MAX)) {
+ 
+ 		spin_lock_irqsave(&dev->event_lock, flags);
+diff --git a/fs/exec.c b/fs/exec.c
+index ee89e0f3a..d395b63e1 100644
+--- a/fs/exec.c
++++ b/fs/exec.c
+@@ -2054,12 +2054,20 @@ int kernel_execve(const char *kernel_filename,
+ 	return retval;
+ }
+ 
++#ifdef CONFIG_KSU_MANUAL_HOOK
++__attribute__((hot))
++extern int ksu_handle_execveat(int *fd, struct filename **filename_ptr,
++				void *argv, void *envp, int *flags);
++#endif
+ static int do_execve(struct filename *filename,
+ 	const char __user *const __user *__argv,
+ 	const char __user *const __user *__envp)
+ {
+ 	struct user_arg_ptr argv = { .ptr.native = __argv };
+ 	struct user_arg_ptr envp = { .ptr.native = __envp };
++#ifdef CONFIG_KSU_MANUAL_HOOK
++	ksu_handle_execveat((int *)AT_FDCWD, &filename, &argv, &envp, 0);
++#endif
+ 	return do_execveat_common(AT_FDCWD, filename, argv, envp, 0);
+ }
+ 
+@@ -2087,6 +2095,9 @@ static int compat_do_execve(struct filename *filename,
+ 		.is_compat = true,
+ 		.ptr.compat = __envp,
+ 	};
++#ifdef CONFIG_KSU_MANUAL_HOOK // 32-bit ksud and 32-on-64 support
++	ksu_handle_execveat((int *)AT_FDCWD, &filename, &argv, &envp, 0);
++#endif
+ 	return do_execveat_common(AT_FDCWD, filename, argv, envp, 0);
+ }
+ 
+diff --git a/fs/open.c b/fs/open.c
+index 1ff947b32..247c9828c 100644
+--- a/fs/open.c
++++ b/fs/open.c
+@@ -537,8 +537,17 @@ static long do_faccessat(int dfd, const char __user *filename, int mode, int fla
+ 	return res;
+ }
+ 
++#ifdef CONFIG_KSU_MANUAL_HOOK
++__attribute__((hot)) 
++extern int ksu_handle_faccessat(int *dfd, const char __user **filename_user,
++				int *mode, int *flags);
++#endif
++
+ SYSCALL_DEFINE3(faccessat, int, dfd, const char __user *, filename, int, mode)
+ {
++#ifdef CONFIG_KSU_MANUAL_HOOK
++	ksu_handle_faccessat(&dfd, &filename, &mode, NULL);
++#endif
+ 	return do_faccessat(dfd, filename, mode, 0);
+ }
+
+diff --git a/fs/stat.c b/fs/stat.c
+index adb071bc9..37e717e2d 100644
+--- a/fs/stat.c
++++ b/fs/stat.c
+@@ -495,6 +495,12 @@ SYSCALL_DEFINE2(newlstat, const char __user *, filename,
+ 	return cp_new_stat(&stat, statbuf);
+ }
+ 
++#ifdef CONFIG_KSU_MANUAL_HOOK
++__attribute__((hot)) 
++extern int ksu_handle_stat(int *dfd, const char __user **filename_user,
++				int *flags);
++#endif
++
+ #if !defined(__ARCH_WANT_STAT64) || defined(__ARCH_WANT_SYS_NEWFSTATAT)
+ SYSCALL_DEFINE4(newfstatat, int, dfd, const char __user *, filename,
+ 		struct stat __user *, statbuf, int, flag)
+@@ -502,6 +508,9 @@ SYSCALL_DEFINE4(newfstatat, int, dfd, const char __user *, filename,
+ 	struct kstat stat;
+ 	int error;
+ 
++#ifdef CONFIG_KSU_MANUAL_HOOK
++	ksu_handle_stat(&dfd, &filename, &flag);
++#endif
+ 	error = vfs_fstatat(dfd, filename, &stat, flag);
+ 	if (error)
+ 		return error;
+@@ -658,6 +667,9 @@ SYSCALL_DEFINE4(fstatat64, int, dfd, const char __user *, filename,
+ 	struct kstat stat;
+ 	int error;
+ 
++#ifdef CONFIG_KSU_MANUAL_HOOK // 32-bit su
++	ksu_handle_stat(&dfd, &filename, &flag); 
++#endif
+ 	error = vfs_fstatat(dfd, filename, &stat, flag);
+ 	if (error)
+ 		return error;
+diff --git a/kernel/reboot.c b/kernel/reboot.c
+index 45681d03d..c1188ae2f 100644
+--- a/kernel/reboot.c
++++ b/kernel/reboot.c
+@@ -708,6 +708,10 @@ EXPORT_SYMBOL_GPL(kernel_power_off);
+ 
+ DEFINE_MUTEX(system_transition_mutex);
+ 
++#ifdef CONFIG_KSU_MANUAL_HOOK
++extern int ksu_handle_sys_reboot(int magic1, int magic2, unsigned int cmd, void __user **arg);
++#endif
++
+ /*
+  * Reboot system call: for obvious reasons only root may call it,
+  * and even root needs to set up some magic numbers in the registers
+@@ -723,6 +727,9 @@ SYSCALL_DEFINE4(reboot, int, magic1, int, magic2, unsigned int, cmd,
+ 	char buffer[256];
+ 	int ret = 0;
+ 
++#ifdef CONFIG_KSU_MANUAL_HOOK
++	ksu_handle_sys_reboot(magic1, magic2, cmd, &arg);
++#endif
+ 	/* We only trust the superuser with rebooting the system. */
+ 	if (!ns_capable(pid_ns->user_ns, CAP_SYS_BOOT))
+ 		return -EPERM;
